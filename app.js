@@ -1,4 +1,4 @@
-/* AgentProof web app — vanilla JS, zero dependencies.
+/* AgentProof web app: vanilla JS, zero dependencies.
  * Reads via public JSON-RPC; writes only through the user's own injected
  * wallet (window.ethereum). No WalletConnect, no QR login, no tracking.
  * Fill in CONFIG after deployment (testnet first, then mainnet).
@@ -6,7 +6,7 @@
 'use strict';
 
 /* ------------------------------------------------------------------ */
-/* CONFIG — edit after each deployment                                 */
+/* CONFIG: edit after each deployment                                 */
 /* ------------------------------------------------------------------ */
 const CONFIG = {
   chainId: 97, // 97 = BSC testnet; 56 = BSC mainnet
@@ -36,7 +36,7 @@ const TOPIC_ATTESTED =
 //         uint8 verdict, bytes32 evidenceHash, uint64 timestamp)
 
 const VERDICTS = ['SAFE', 'HOLD', 'BLOCK'];
-const VERDICT_LABEL = ['Safe to mint', 'Hold — needs more checks', 'Block — template or scam'];
+const VERDICT_LABEL = ['Safe to mint', 'Hold: needs more checks', 'Block: template or scam'];
 
 /* ------------------------------------------------------------------ */
 /* Encoding / decoding helpers (pure functions)                        */
@@ -225,14 +225,20 @@ async function initPage() {
     ? CONFIG.explorer + '/address/' + CONFIG.contractAddress
     : '#');
   if (!CONFIG.contractAddress) {
-    setText('deploy-note', 'The registry contract is not deployed yet — the list below will populate after the testnet deployment.');
+    setText('deploy-note', 'The registry contract is not deployed yet. The list below will populate after the testnet deployment.');
     show('deploy-banner');
   }
   bind('btn-refresh', () => refreshList());
-  bind('btn-search', () => searchContract());
   bind('btn-connect', () => connectWallet());
   bind('btn-attest', () => submitAttest());
   bind('btn-evidence-hash', () => computeEvidenceHash());
+  const searchForm = $('search-form');
+  if (searchForm) {
+    searchForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      searchContract();
+    });
+  }
   await refreshList();
 }
 
@@ -272,8 +278,10 @@ async function refreshList() {
   tbody.innerHTML = '<tr><td colspan="5">Loading…</td></tr>';
   try {
     const rows = await loadAllAttestations();
+    lastRows = rows;
     setText('stat-contracts', String(rows.length));
     setText('stat-attestations', String(rows.reduce((n, r) => n + r.attestorCount, 0)));
+    renderMixBar(rows);
     if (!rows.length) {
       tbody.innerHTML = '<tr><td colspan="5">No attestations yet. Be the first to attest a contract below.</td></tr>';
       return;
@@ -281,16 +289,55 @@ async function refreshList() {
     tbody.innerHTML = rows.map((r) => {
       const v = r.verdicts[2] > 0 ? 2 : r.verdicts[1] > 0 ? 1 : 0;
       return '<tr>' +
-        '<td><a href="' + CONFIG.explorer + '/address/' + r.contract + '" target="_blank" rel="noopener">' + shortAddr(r.contract) + '</a></td>' +
-        '<td><span class="verdict v' + v + '">' + VERDICTS[v] + '</span></td>' +
-        '<td>' + r.attestorCount + '</td>' +
-        '<td>' + r.verdicts[0] + ' safe / ' + r.verdicts[1] + ' hold / ' + r.verdicts[2] + ' block</td>' +
-        '<td>' + new Date(r.lastTimestamp * 1000).toLocaleString() + '</td>' +
+        '<td data-label="Contract"><a href="' + CONFIG.explorer + '/address/' + r.contract + '" target="_blank" rel="noopener">' + shortAddr(r.contract) + '</a></td>' +
+        '<td data-label="Verdict"><span class="verdict v' + v + '">' + VERDICTS[v] + '</span></td>' +
+        '<td data-label="Attestors">' + r.attestorCount + '</td>' +
+        '<td data-label="Breakdown">' + r.verdicts[0] + ' safe / ' + r.verdicts[1] + ' hold / ' + r.verdicts[2] + ' block</td>' +
+        '<td data-label="Last attested">' + new Date(r.lastTimestamp * 1000).toLocaleString() + '</td>' +
         '</tr>';
     }).join('');
   } catch (e) {
     tbody.innerHTML = '<tr><td colspan="5">Failed to load: ' + escapeHtml(e.message) + '</td></tr>';
   }
+}
+
+// Latest loaded registry rows (drives the check result panel + mix bar).
+let lastRows = [];
+
+// Live verdict distribution across all attestations (the registry's mix).
+function renderMixBar(rows) {
+  const wrap = $('verdict-mix');
+  const bar = $('mix-bar');
+  const legend = $('mix-legend');
+  if (!wrap || !bar || !legend) return;
+  const totals = { 0: 0, 1: 0, 2: 0 };
+  for (const r of rows) {
+    totals[0] += r.verdicts[0];
+    totals[1] += r.verdicts[1];
+    totals[2] += r.verdicts[2];
+  }
+  const total = totals[0] + totals[1] + totals[2];
+  if (!total) {
+    wrap.style.display = 'none';
+    return;
+  }
+  wrap.style.display = '';
+  const pct = (n) => ((n / total) * 100).toFixed(1) + '%';
+  bar.innerHTML =
+    '<i class="m-safe" style="width:' + pct(totals[0]) + '"></i>' +
+    '<i class="m-hold" style="width:' + pct(totals[1]) + '"></i>' +
+    '<i class="m-block" style="width:' + pct(totals[2]) + '"></i>';
+  legend.innerHTML = 'Verdict mix across all attestations: <b>' + totals[0] +
+    ' safe</b> &middot; <b>' + totals[1] + ' hold</b> &middot; <b>' + totals[2] +
+    ' block</b> (of ' + total + ' total).';
+}
+
+// Show the check result as a verdict panel (the page's dealt moment).
+function showResult(cls, html) {
+  const out = $('search-result');
+  if (!out) return;
+  out.className = 'result show' + (cls ? ' ' + cls : '');
+  out.innerHTML = html;
 }
 
 function shortAddr(a) {
@@ -302,27 +349,54 @@ function escapeHtml(s) {
 
 async function searchContract() {
   const input = $('search-input');
-  const out = $('search-result');
-  if (!input || !out) return;
+  const btn = $('btn-search');
+  if (!input) return;
   const addr = input.value.trim();
   if (!isAddress(addr)) {
-    out.textContent = 'Enter a valid 0x contract address.';
+    showResult('error', '<p>Enter a valid 0x contract address.</p>');
     return;
   }
-  out.textContent = 'Checking…';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Checking…';
+  }
+  showResult('loading', '<p>Checking…</p>');
   try {
     const count = await getAttestationCount(addr);
-    out.textContent = 'Attestations for ' + addr + ': ' + count.toString() +
-      ' (live on-chain read). Open it in the explorer for the full history: ' +
-      CONFIG.explorer + '/address/' + addr;
+    const row = lastRows.find((r) => r.contract === addr.toLowerCase());
+    const explorerUrl = CONFIG.explorer + '/address/' + addr;
+    if (count === 0n) {
+      showResult('none',
+        '<span class="result-verdict">Not attested yet</span>' +
+        '<p>No agent has verified <span class="mono">' + escapeHtml(addr) + '</span> on-chain.</p>' +
+        '<p><a href="' + explorerUrl + '" target="_blank" rel="noopener">View on explorer</a></p>');
+    } else if (row) {
+      const worst = row.verdicts[2] > 0 ? 2 : row.verdicts[1] > 0 ? 1 : 0;
+      showResult('v' + worst,
+        '<span class="result-verdict">' + VERDICTS[worst] + '</span>' +
+        '<p><b>' + count.toString() + '</b> attestation' + (count === 1n ? '' : 's') +
+        ' for <span class="mono">' + escapeHtml(addr) + '</span>: ' +
+        row.verdicts[0] + ' safe, ' + row.verdicts[1] + ' hold, ' + row.verdicts[2] + ' block.</p>' +
+        '<p>' + VERDICT_LABEL[worst] + '. <a href="' + explorerUrl + '" target="_blank" rel="noopener">View on explorer</a></p>');
+    } else {
+      showResult('none',
+        '<span class="result-verdict">' + count.toString() + ' attestations</span>' +
+        '<p>Attestations exist for <span class="mono">' + escapeHtml(addr) + '</span> on-chain.</p>' +
+        '<p><a href="' + explorerUrl + '" target="_blank" rel="noopener">View on explorer for the full history</a></p>');
+    }
   } catch (e) {
-    out.textContent = 'Lookup failed: ' + e.message;
+    showResult('error', '<p>Lookup failed: ' + escapeHtml(e.message) + '</p>');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Check a contract';
+    }
   }
 }
 
 async function connectWallet() {
   if (!window.ethereum) {
-    setStatus('No injected wallet found. Install a wallet browser extension and reload. This site never asks for QR-code login.', true);
+    setStatus('An injected wallet was not found. Install a wallet browser extension and reload. Connection here is injected-wallet only.', true);
     return;
   }
   try {
@@ -333,15 +407,15 @@ async function connectWallet() {
     const chainHex = await window.ethereum.request({ method: 'eth_chainId' });
     const chainId = parseInt(chainHex, 16);
     if (chainId !== CONFIG.chainId) {
-      setStatus('Your wallet is on chain ' + chainId + ' — please switch to ' + CONFIG.chainName + ' (chain ' + CONFIG.chainId + ').', true);
+      setStatus('Your wallet is on chain ' + chainId + '. Please switch to ' + CONFIG.chainName + ' (chain ' + CONFIG.chainId + ').', true);
       return;
     }
     const bal = await getAgentIdBalance(connectedAccount);
     setText('agentid-balance', bal.toString());
     if (bal === 0n) {
-      setStatus('This address holds no Agent ID, so it cannot attest. Attesting requires holding at least one Agent ID.', true);
+      setStatus('Attesting requires holding at least one Agent ID.', true);
     } else {
-      setStatus('Connected. Agent ID balance: ' + bal.toString() + ' — you can attest.');
+      setStatus('Connected. Agent ID balance: ' + bal.toString() + '. You can attest.');
       show('attest-form');
     }
   } catch (e) {
@@ -379,7 +453,7 @@ async function submitAttest() {
   const evidenceHash = $('evidence-hash').value.trim().toLowerCase();
   try {
     const data = buildAttestCalldata(contract, verdict, evidenceHash);
-    setStatus('Sending transaction — please review and confirm it in your wallet. Nothing is signed without your confirmation.');
+    setStatus('Sending transaction. Please review and confirm it in your wallet. Nothing is signed without your confirmation.');
     const txHash = await window.ethereum.request({
       method: 'eth_sendTransaction',
       params: [{ from: connectedAccount, to: CONFIG.contractAddress, data }],
