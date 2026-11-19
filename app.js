@@ -1,7 +1,7 @@
 /* AgentProof web app: vanilla JS, zero dependencies.
  * Reads via public JSON-RPC; writes only through the user's own injected
  * wallet (window.ethereum). No WalletConnect, no QR login, no tracking.
- * Fill in CONFIG after deployment (testnet first, then mainnet).
+ * Fill in CONFIG after deployment (mainnet live).
  */
 'use strict';
 
@@ -9,17 +9,16 @@
 /* CONFIG: edit after each deployment                                 */
 /* ------------------------------------------------------------------ */
 const CONFIG = {
-  chainId: 97, // 97 = BSC testnet; 56 = BSC mainnet
-  chainName: 'BSC Testnet',
-  rpcUrl: 'https://bsc-testnet.publicnode.com',
-  explorer: 'https://testnet.bscscan.com',
+  chainId: 56, // 97 = BSC testnet; 56 = BSC mainnet
+  chainName: 'BSC Mainnet',
+  rpcUrl: 'https://bsc.publicnode.com',
+  explorer: 'https://bscscan.com',
   // AgentProof registry contract (empty until deployed):
-  contractAddress: '0xFB3FFb123fcd26f065dBdb6550404E48802CA592',
-  // Agent ID token contract (testnet: the deployed MockAgentId address;
-  // mainnet: 0x60b9262456de011f7d15a54cdd8c48baaa8b022f):
-  agentIdContract: '0x2A02c15ea9EB053897B563106A354EcA7EC5555C',
+  contractAddress: '0x8Ae420973b52D31A3Aef129f0F773F37aF9a215C',
+  // Agent ID token contract (SPACE ID, mainnet):
+  agentIdContract: '0x60b9262456de011f7d15a54cdd8c48baaa8b022f',
   // First block to scan for Attested events (set to the deploy block):
-  deployBlock: 143616955,
+  deployBlock: 134493804,
   logChunkSize: 1000,
 };
 
@@ -225,7 +224,7 @@ async function initPage() {
     ? CONFIG.explorer + '/address/' + CONFIG.contractAddress
     : '#');
   if (!CONFIG.contractAddress) {
-    setText('deploy-note', 'The registry contract is not deployed yet. The list below will populate after the testnet deployment.');
+    setText('deploy-note', 'The registry contract is not deployed yet. The list below will populate after the mainnet deployment.');
     show('deploy-banner');
   }
   bind('btn-refresh', () => refreshList());
