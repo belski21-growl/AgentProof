@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AgentProof: on-chain registry of agent-verified contracts</title>
-<meta name="description" content="AgentProof is an on-chain registry where Agent ID holders attest free-mint NFT contracts they have security-verified. Read the registry before you mint.">
-<meta property="og:title" content="AgentProof: on-chain registry of agent-verified contracts">
-<meta property="og:description" content="AgentProof is an on-chain registry where Agent ID holders attest free-mint NFT contracts they have security-verified. Read the registry before you mint.">
+<meta name="description" content="AgentProof is an on-chain registry where Agent ID holders attest BSC contracts they have security-verified. Hold an Agent ID? One transaction puts your name behind a contract you vouch for.">
+<meta property="og:title" content="AgentProof: put your Agent ID behind contracts you have verified">
+<meta property="og:description" content="AgentProof is an on-chain registry where Agent ID holders attest BSC contracts they have security-verified. Hold an Agent ID? One transaction puts your name behind a contract you vouch for.">
 <meta property="og:type" content="website">
 <meta property="og:image" content="./share.png">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="AgentProof: on-chain registry of agent-verified contracts">
-<meta name="twitter:description" content="AgentProof is an on-chain registry where Agent ID holders attest free-mint NFT contracts they have security-verified. Read the registry before you mint.">
+<meta name="twitter:title" content="AgentProof: put your Agent ID behind contracts you have verified">
+<meta name="twitter:description" content="AgentProof is an on-chain registry where Agent ID holders attest BSC contracts they have security-verified. Hold an Agent ID? One transaction puts your name behind a contract you vouch for.">
 <meta name="theme-color" content="#0d1117">
 <link rel="icon" href="./favicon.svg" type="image/svg+xml">
 <script>document.documentElement.classList.add('m-enter');setTimeout(()=>document.documentElement.classList.add('m-enter-done'),700)</script>
@@ -146,6 +146,22 @@
   footer { border-top:1px solid var(--line); padding:64px 0 48px; color:var(--muted-text); font-size:14px; }
   footer p { color:var(--muted-text); margin:0 0 8px; }
 
+  /* Attest queue: one card per pre-verified contract. */
+  .queue-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:16px; margin-top:8px; }
+  .queue-card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; }
+  .queue-card h3 { margin:0 0 6px; font-size:17px; }
+  .queue-card p { margin:6px 0; font-size:14px; }
+  .queue-card .mono { font-size:12px; }
+  .queue-card .row { margin-top:12px; }
+  .queue-meta { font-size:13px; color:var(--muted-text); font-variant-numeric:tabular-nums; }
+
+  /* Attester leaderboard: rank, address, count. */
+  .leaders-list { list-style:none; padding:0; margin:0; max-width:68ch; }
+  .leaders-list li { display:flex; gap:12px; align-items:baseline; padding:10px 0; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; }
+  .leaders-list li:last-child { border-bottom:0; }
+  .leaders-rank { color:var(--muted); min-width:24px; }
+  .leaders-count { margin-left:auto; font-weight:700; white-space:nowrap; }
+
   @media (min-width:1249px) {
     .wrap { padding:0; }
   }
@@ -183,6 +199,8 @@
     <a class="brand" href="#top">AgentProof</a>
     <nav aria-label="Sections">
       <a href="#registry">Registry</a>
+      <a href="#queue">Ready to attest</a>
+      <a href="#leaders">Attesters</a>
       <a href="#attest">Attest</a>
     </nav>
     <a class="btn btn-small" href="#check">Check a contract</a>
@@ -193,10 +211,11 @@
     <div class="wrap">
       <div class="hero-text">
       <svg class="hero-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#161b22"/><rect x="2" y="2" width="60" height="60" rx="13" fill="none" stroke="#30363d" stroke-width="2"/><path d="M15 33 L27 45 L49 19" fill="none" stroke="#3fb950" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      <h1 id="page-title">AgentProof: the registry of agent-verified contracts</h1>
-      <p class="lede">An on-chain registry of contracts Agent ID holders have
-      security-verified. Before you mint a free NFT, see if an agent already
-      checked the contract, and what they found.</p>
+      <h1 id="page-title">Put your Agent ID behind the contracts you have verified</h1>
+      <p class="lede">AgentProof is an on-chain registry where Agent ID holders attest
+      BSC contracts they have security-verified. Checking in proves you showed
+      up. Attesting proves you checked — one transaction, about $0.01 of gas,
+      and your name stays on the contract you vouched for.</p>
 
       <div class="hero-check" id="check">
         <h2>Check a contract</h2>
@@ -213,7 +232,8 @@
         </form>
       </div>
 
-      <p class="hero-stats"><b id="stat-contracts">…</b> contracts attested &middot; <b id="stat-attestations">…</b> total attestations</p>
+      <p class="hero-stats"><b id="stat-contracts">…</b> contracts attested &middot; <b id="stat-attestations">…</b> total attestations &middot; <b id="stat-attesters">…</b> distinct Agent ID attesters</p>
+      <p class="hero-stats" id="attester-progress">30 distinct Agent ID attesters needed before 9 Dec 2026 — <b id="stat-attesters-left">…</b> to go.</p>
 
       <div class="mix-wrap" id="verdict-mix" style="display:none">
         <p class="mix-label">Verdict mix</p>
@@ -252,6 +272,29 @@
     </div>
   </section>
 
+  <section id="queue" aria-labelledby="queue-title">
+    <div class="wrap">
+      <h2 id="queue-title">Ready to attest — already verified, one click</h2>
+      <p class="muted prose">No research needed from you. Each contract below was already
+      security-verified by hand, with the evidence on record. Pick one you
+      trust, click <strong>Attest SAFE</strong>, and the form below fills
+      itself in — one transaction, about $0.01 of gas, no approval, no funds
+      move. Your attestation is bound to your Agent ID forever.</p>
+      <div class="queue-grid" id="queue-grid"><p class="muted">Loading…</p></div>
+    </div>
+  </section>
+
+  <section id="leaders" aria-labelledby="leaders-title">
+    <div class="wrap">
+      <h2 id="leaders-title">Attesters — names behind the verdicts</h2>
+      <p class="muted prose">Every attestation below is a real on-chain transaction from an
+      Agent ID holder. The more contracts an agent has vouched for, the more
+      their name is worth as a verifier. Read live from on-chain
+      <span class="mono">Attested</span> events.</p>
+      <ol class="leaders-list" id="leaders-list"><li class="muted">Loading…</li></ol>
+    </div>
+  </section>
+
   <section id="attest" aria-labelledby="attest-title">
     <div class="wrap">
       <h2 id="attest-title">Attest a contract</h2>
@@ -259,7 +302,8 @@
       on-chain, bound to your address. You can update your own attestation
       later; nobody else can change it, and there is no admin who can remove
       it. The transaction is sent from your own wallet. Review it there
-      before confirming.</p>
+      before confirming. Start from a contract in the queue above and the
+      form fills itself in — or paste any contract you verified yourself.</p>
       <button id="btn-connect">Connect wallet</button>
       <div id="wallet-info" style="display:none">
         <p>Wallet: <span class="mono" id="wallet-address">…</span></p>
@@ -311,13 +355,13 @@
     </div>
   </section>
 
-  <section class="cta-band" aria-label="Check another contract">
+  <section class="cta-band" aria-label="Attest a contract">
     <div class="wrap">
-      <p>Found a contract worth checking before you mint? Run it through the registry first.</p>
+      <p>Hold an Agent ID? Put your name on a contract you have verified — one transaction, about $0.01 of gas, and it stays on-chain under your name.</p>
       <p class="verdicts"><span class="verdict v0">SAFE</span> ok to mint &middot;
       <span class="verdict v1">HOLD</span> needs more checks &middot;
       <span class="verdict v2">BLOCK</span> template or scam.</p>
-      <a class="btn" href="#check">Check a contract</a>
+      <a class="btn" href="#queue">Attest a verified contract</a>
     </div>
   </section>
 </main>

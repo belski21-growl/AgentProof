@@ -38,6 +38,48 @@ const VERDICTS = ['SAFE', 'HOLD', 'BLOCK'];
 const VERDICT_LABEL = ['Safe to mint', 'Hold: needs more checks', 'Block: template or scam'];
 
 /* ------------------------------------------------------------------ */
+/* Attest queue: contracts already security-verified by hand (seed     */
+/* attestations, 19 Nov 2026). Evidence hashes are the keccak256 of   */
+/* the evidence notes stored with the seed attestations, so a queue    */
+/* attestation references the same verified evidence.                 */
+/* ------------------------------------------------------------------ */
+const ATTEST_TARGET = 30; // distinct Agent ID attesters needed by 9 Dec 2026
+const QUEUE = [
+  {
+    name: 'ContextGraph Nodes',
+    contract: '0x08b1323a74530BEDd2188b458eBcC856315d8E0f',
+    verdict: 0,
+    blurb: 'Free mint, site live, 3 nodes minted #777 #1113 #2934.',
+    note: 'AgentProof seed: ContextGraph Nodes verified SAFE by belski 2026-11-19 - free mint, site contextgraph.art live, owner not on skip-list, 3 nodes minted #777 #1113 #2934',
+    evidenceHash: '0x04e481eb7a63985c80226b8b028a6be5479045186e5aa2af20cf9bd73b092c49',
+  },
+  {
+    name: 'Baiwor Passport',
+    contract: '0x0c458d61848ef7ffd753fbdd1179a7053a60661f',
+    verdict: 0,
+    blurb: 'Free mint, site live, Sourcify verified, #40 minted.',
+    note: 'AgentProof seed: Baiwor Passport verified SAFE by belski 2026-11-19 - free mint, site baiwor.my.id live, Sourcify verified, #40 minted',
+    evidenceHash: '0x4b4908ddd5670a317f18b7b6cdb4948a41cdda0d61718043a66173ab54679b1f',
+  },
+  {
+    name: 'Talvio Dot Robot',
+    contract: '0xFfC521D504F20bd7bCd0871B9B39BA9501F5dB2C',
+    verdict: 0,
+    blurb: 'Free mint, site live, #119 minted.',
+    note: 'AgentProof seed: Talvio Dot Robot verified SAFE by belski 2026-11-19 - free mint, site talviogenerate.com live, #119 minted',
+    evidenceHash: '0x081daf490101509a5f2a26b576174ccef8a032c4e3c478ec55ee7d2bdb114542',
+  },
+  {
+    name: 'AONE Hero',
+    contract: '0x9B0c237A123277fCf8768550Bbdd7767C73Cf5D3',
+    verdict: 0,
+    blurb: 'Free mint, 2 heroes #1504 #1505 minted, 3000 AONE locked each.',
+    note: 'AgentProof seed: AONE Hero verified SAFE by belski 2026-11-19 - free mint, 2 heroes #1504 #1505 minted, 3000 AONE locked each',
+    evidenceHash: '0x1fcc2dd0061fd8504521fda743036d81e4c1b58a5c8a77fce20ae4e42d2fd479',
+  },
+];
+
+/* ------------------------------------------------------------------ */
 /* Encoding / decoding helpers (pure functions)                        */
 /* ------------------------------------------------------------------ */
 function isAddress(v) {
@@ -281,6 +323,9 @@ async function refreshList() {
     setText('stat-contracts', String(rows.length));
     setText('stat-attestations', String(rows.reduce((n, r) => n + r.attestorCount, 0)));
     renderMixBar(rows);
+    renderQueue(rows);
+    renderLeaderboard(rows);
+    updateAttesterStats(rows);
     if (!rows.length) {
       tbody.innerHTML = '<tr><td colspan="5">No attestations yet. Be the first to attest a contract below.</td></tr>';
       return;
@@ -329,6 +374,77 @@ function renderMixBar(rows) {
   legend.innerHTML = 'Verdict mix across all attestations: <b>' + totals[0] +
     ' safe</b> &middot; <b>' + totals[1] + ' hold</b> &middot; <b>' + totals[2] +
     ' block</b> (of ' + total + ' total).';
+}
+
+// Attest queue: pre-verified contracts, one click prefills the form.
+function renderQueue(rows) {
+  const grid = $('queue-grid');
+  if (!grid) return;
+  const countByContract = new Map();
+  for (const r of rows) countByContract.set(r.contract, r.attestorCount);
+  grid.innerHTML = QUEUE.map((q, i) => {
+    const n = countByContract.get(q.contract.toLowerCase()) || 0;
+    return '<article class="queue-card">' +
+      '<h3>' + escapeHtml(q.name) + ' <span class="verdict v' + q.verdict + '">' + VERDICTS[q.verdict] + '</span></h3>' +
+      '<p><a class="mono" href="' + CONFIG.explorer + '/address/' + q.contract + '" target="_blank" rel="noopener">' + shortAddr(q.contract) + '</a></p>' +
+      '<p>' + escapeHtml(q.blurb) + '</p>' +
+      '<p class="queue-meta">' + n + ' attestation' + (n === 1 ? '' : 's') + ' so far</p>' +
+      '<div class="row"><button class="btn-small" data-queue="' + i + '">Attest SAFE</button></div>' +
+      '</article>';
+  }).join('');
+  grid.querySelectorAll('[data-queue]').forEach((btn) => {
+    btn.addEventListener('click', () => prefillAttest(QUEUE[Number(btn.dataset.queue)]));
+  });
+}
+
+// Attester leaderboard: distinct Agent ID holders, ranked by attestations.
+function renderLeaderboard(rows) {
+  const list = $('leaders-list');
+  if (!list) return;
+  const byAgent = new Map();
+  for (const r of rows) {
+    for (const a of r.agents) byAgent.set(a.agent, (byAgent.get(a.agent) || 0) + 1);
+  }
+  const leaders = [...byAgent.entries()].sort((x, y) => y[1] - x[1]);
+  if (!leaders.length) {
+    list.innerHTML = '<li class="muted">No attestations yet. Be the first name on this board.</li>';
+    return;
+  }
+  list.innerHTML = leaders.map(([agent, n], i) =>
+    '<li><span class="leaders-rank">' + (i + 1) + '.</span>' +
+    '<a class="mono" href="' + CONFIG.explorer + '/address/' + agent + '" target="_blank" rel="noopener">' + shortAddr(agent) + '</a>' +
+    '<span class="leaders-count">' + n + ' attestation' + (n === 1 ? '' : 's') + '</span></li>'
+  ).join('');
+}
+
+// Distinct attesters vs the 30 needed before 9 Dec 2026.
+function updateAttesterStats(rows) {
+  const agents = new Set();
+  for (const r of rows) {
+    for (const a of r.agents) agents.add(a.agent);
+  }
+  const n = agents.size;
+  setText('stat-attesters', String(n));
+  setText('stat-attesters-left', String(Math.max(0, ATTEST_TARGET - n)));
+}
+
+// Fill the attest form from a queue card and jump to it.
+function prefillAttest(q) {
+  const contractEl = $('attest-contract');
+  const verdictEl = $('attest-verdict');
+  const textEl = $('evidence-text');
+  const hashEl = $('evidence-hash');
+  if (contractEl) contractEl.value = q.contract;
+  if (verdictEl) verdictEl.value = String(q.verdict);
+  if (textEl) textEl.value = q.note;
+  if (hashEl) hashEl.value = q.evidenceHash;
+  const target = $('attest');
+  if (target) target.scrollIntoView({ behavior: 'smooth' });
+  if (!connectedAccount) {
+    setStatus('Form prefilled for ' + q.name + '. Connect your wallet to send this attestation.');
+  } else {
+    setStatus('Form prefilled for ' + q.name + '. Review and confirm in your wallet.');
+  }
 }
 
 // Show the check result as a verdict panel (the page's dealt moment).
