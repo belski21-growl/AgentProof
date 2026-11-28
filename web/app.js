@@ -20,6 +20,16 @@ const CONFIG = {
   // First block to scan for Attested events (set to the deploy block):
   deployBlock: 134493804,
   logChunkSize: 1000,
+  // Static snapshot of attester rows (committed to the repo). Public RPCs
+  // prune Attested logs older than ~block 136,000,000, so logs alone show
+  // 0/30. Totals always come from contract views; logs only supplement
+  // attestations newer than the snapshot cut block.
+  staticAttestersUrl: './attesters.json',
+  rpcFallbacks: [
+    'https://bsc-dataseed2.binance.org',
+    'https://bsc-dataseed1.binance.org',
+  ],
+  recentLogWindow: 200000, // blocks of recent logs merged on each load
 };
 
 /* ------------------------------------------------------------------ */
@@ -29,6 +39,8 @@ const SEL_ATTEST = '0x6dae6eed'; // attest(address,uint8,bytes32)
 const SEL_BALANCE_OF = '0x70a08231'; // balanceOf(address)
 const SEL_ATTESTATION_COUNT = '0x44bb1cbf'; // attestationCount(address)
 const SEL_GET_ATTESTATION = '0xe8d55ccf'; // getAttestation(address,address)
+const SEL_ATTESTED_CONTRACTS_COUNT = '0x19372d31'; // attestedContractsCount()
+const SEL_ATTESTED_CONTRACT_AT = '0x574d3c36'; // attestedContractAt(uint256)
 const TOPIC_ATTESTED =
   '0x2287a2652c6b5340c09bd91963caacbebfa3f7d8e722b19b7ee27f7a0be77eb4';
 // Attested(address indexed agent, address indexed nftContract,
@@ -119,6 +131,9 @@ function buildAttestationCountCalldata(contract) {
 function buildGetAttestationCalldata(contract, agent) {
   return SEL_GET_ATTESTATION + encodeAddress(contract) + encodeAddress(agent);
 }
+function buildAttestedContractAtCalldata(index) {
+  return SEL_ATTESTED_CONTRACT_AT + encodeUint(index);
+}
 function decodeUint256(hex) {
   return BigInt('0x' + strip0x(hex).slice(-64));
 }
@@ -182,15 +197,27 @@ function aggregateAttestations(logs) {
 /* RPC helpers                                                         */
 /* ------------------------------------------------------------------ */
 async function rpc(method, params) {
-  const res = await fetch(CONFIG.rpcUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', method, params, id: 1 }),
-  });
-  if (!res.ok) throw new Error('RPC HTTP ' + res.status);
-  const json = await res.json();
-  if (json.error) throw new Error('RPC error: ' + JSON.stringify(json.error));
-  return json.result;
+  // Try the primary RPC, then the fallbacks. A pruned log range returns []
+  // (not an error), so this only helps availability, not pruning: the
+  // pruning fix is the views + static snapshot below.
+  const urls = [CONFIG.rpcUrl, ...CONFIG.rpcFallbacks];
+  let lastErr = null;
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', method, params, id: 1 }),
+      });
+      if (!res.ok) throw new Error('RPC HTTP ' + res.status);
+      const json = await res.json();
+      if (json.error) throw new Error('RPC error: ' + JSON.stringify(json.error));
+      return json.result;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('RPC failed');
 }
 async function ethCall(to, data) {
   return rpc('eth_call', [{ to, data }, 'latest']);
@@ -225,20 +252,99 @@ async function fetchAttestedLogs(fromBlock, toBlock) {
   ]);
   return logs;
 }
-async function loadAllAttestations() {
+// Authoritative totals, straight from contract views. Views are never
+// pruned, so these numbers stay correct even when log history is gone.
+async function loadViewsTotals() {
+  if (!CONFIG.contractAddress) return null;
+  const countRaw = await ethCall(CONFIG.contractAddress, SEL_ATTESTED_CONTRACTS_COUNT);
+  const contractCount = Number(decodeUint256(countRaw));
+  const contracts = [];
+  let totalAttestations = 0n;
+  for (let i = 0; i < contractCount; i++) {
+    const raw = await ethCall(CONFIG.contractAddress, buildAttestedContractAtCalldata(i));
+    const contract = '0x' + raw.slice(-40);
+    const cRaw = await ethCall(CONFIG.contractAddress, buildAttestationCountCalldata(contract));
+    const c = decodeUint256(cRaw);
+    totalAttestations += c;
+    contracts.push({ contract: contract.toLowerCase(), attestationCount: Number(c) });
+  }
+  return { contractCount, totalAttestations: Number(totalAttestations), contracts };
+}
+
+// Attester rows from the committed static snapshot (attesters.json).
+async function loadStaticAttestations() {
+  const res = await fetch(CONFIG.staticAttestersUrl);
+  if (!res.ok) throw new Error('static snapshot HTTP ' + res.status);
+  const snap = await res.json();
+  const rows = (snap.attestations || []).map((a) => ({
+    agent: String(a.agent).toLowerCase(),
+    nftContract: String(a.contract).toLowerCase(),
+    verdict: Number(a.verdict),
+    evidenceHash: a.evidenceHash,
+    timestamp: Number(a.timestamp),
+    blockNumber: a.blockNumber || 0,
+    transactionHash: a.transactionHash || '',
+  }));
+  return { rows: aggregateAttestations(rows), cutBlock: snap.cut_block || 0, counts: snap.counts || null };
+}
+
+// Best-effort only: Attested logs newer than the snapshot cut block.
+// Any chunk failure stops the scan and keeps what was already fetched.
+async function loadRecentAttestations(fromBlock) {
   if (!CONFIG.contractAddress) return [];
   const latest = parseInt(await rpc('eth_blockNumber', []), 16);
-  const from = CONFIG.deployBlock || 0;
+  const from = Math.max(fromBlock || 0, latest - CONFIG.recentLogWindow);
   const all = [];
-  for (let start = from; start <= latest; start += CONFIG.logChunkSize) {
-    const end = Math.min(start + CONFIG.logChunkSize - 1, latest);
-    const chunk = await fetchAttestedLogs(start, end);
+  for (let start = from; start <= latest; start += CONFIG.logChunkSize * 10) {
+    const end = Math.min(start + CONFIG.logChunkSize * 10 - 1, latest);
+    let chunk;
+    try {
+      chunk = await fetchAttestedLogs(start, end);
+    } catch (e) {
+      break;
+    }
     for (const log of chunk) {
       const parsed = parseAttestedLog(log);
       if (parsed) all.push(parsed);
     }
   }
-  return aggregateAttestations(all);
+  return all;
+}
+
+// Merge snapshot rows with recent logs; latest timestamp wins per pair.
+function mergeAttestations(staticRows, recentLogs) {
+  const byKey = new Map();
+  for (const r of staticRows) {
+    for (const a of r.agents) byKey.set(a.nftContract + '|' + a.agent, a);
+  }
+  for (const a of recentLogs) {
+    const k = a.nftContract + '|' + a.agent;
+    const prev = byKey.get(k);
+    if (!prev || a.timestamp >= prev.timestamp) byKey.set(k, a);
+  }
+  return aggregateAttestations([...byKey.values()]);
+}
+
+// Registry data: views for totals, snapshot + recent logs for rows.
+// Views and snapshot are fetched in parallel; either may fail alone and
+// the page still renders from the other source.
+async function loadRegistryData() {
+  if (!CONFIG.contractAddress) return { rows: [], views: null, snapshotCut: 0 };
+  const [staticRes, viewsRes] = await Promise.allSettled([
+    loadStaticAttestations(),
+    loadViewsTotals(),
+  ]);
+  const staticRows = staticRes.status === 'fulfilled' ? staticRes.value.rows : [];
+  const snapshotCut = staticRes.status === 'fulfilled' ? staticRes.value.cutBlock : 0;
+  const viewsData = viewsRes.status === 'fulfilled' ? viewsRes.value : null;
+  let rows = staticRows;
+  try {
+    const recent = await loadRecentAttestations(snapshotCut);
+    if (recent.length) rows = mergeAttestations(staticRows, recent);
+  } catch (e) {
+    // Best-effort only; snapshot rows + views still render.
+  }
+  return { rows, views: viewsData, snapshotCut };
 }
 
 /* ------------------------------------------------------------------ */
@@ -318,10 +424,20 @@ async function refreshList() {
   if (!tbody) return;
   tbody.innerHTML = '<tr><td colspan="5">Loading…</td></tr>';
   try {
-    const rows = await loadAllAttestations();
+    const { rows, views, snapshotCut } = await loadRegistryData();
     lastRows = rows;
-    setText('stat-contracts', String(rows.length));
-    setText('stat-attestations', String(rows.reduce((n, r) => n + r.attestorCount, 0)));
+    const rowsTotal = rows.reduce((n, r) => n + r.attestorCount, 0);
+    // Totals come from contract views (never pruned); rows are the snapshot
+    // plus recent logs. If the views count more than the rows list, the
+    // snapshot is stale and the note below says so honestly.
+    setText('stat-contracts', String(views ? views.contractCount : rows.length));
+    setText('stat-attestations', String(views ? views.totalAttestations : rowsTotal));
+    if (views && views.totalAttestations > rowsTotal) {
+      setText('snapshot-note', 'Showing ' + rowsTotal + ' attestations from the on-chain snapshot (block ' + snapshotCut + '); ' + views.totalAttestations + ' total counted live from the contract — refresh the snapshot to list the newest ones.');
+      show('snapshot-note');
+    } else {
+      hide('snapshot-note');
+    }
     renderMixBar(rows);
     renderQueue(rows);
     renderLeaderboard(rows);
@@ -587,6 +703,8 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     CONFIG, buildAttestCalldata, parseAttestedLog, aggregateAttestations,
     decodeUint256, decodeAttestation, isAddress, isBytes32, sha256Hex,
-    getAgentIdBalance, getAttestationCount, getAttestation, loadAllAttestations,
+    getAgentIdBalance, getAttestationCount, getAttestation,
+    loadRegistryData, loadViewsTotals, loadStaticAttestations,
+    loadRecentAttestations, mergeAttestations,
   };
 }

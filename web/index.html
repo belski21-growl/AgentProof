@@ -251,10 +251,11 @@
           <h2 id="registry-title">Registry</h2>
           <button class="secondary" id="btn-refresh">Refresh the list</button>
         </div>
-        <p class="muted registry-legend">Read live from on-chain <span class="mono">Attested</span> events.
+        <p class="muted registry-legend">Totals read live from the contract; attester rows from the on-chain snapshot, plus recent events.
         Verdicts: <span class="verdict v0">SAFE</span> ok to mint &middot;
         <span class="verdict v1">HOLD</span> needs more checks &middot;
         <span class="verdict v2">BLOCK</span> template or scam.</p>
+        <p class="muted" id="snapshot-note" style="display:none"></p>
         <div class="table-wrap">
           <table>
             <thead>
@@ -289,8 +290,8 @@
       <h2 id="leaders-title">Attesters — names behind the verdicts</h2>
       <p class="muted prose">Every attestation below is a real on-chain transaction from an
       Agent ID holder. The more contracts an agent has vouched for, the more
-      their name is worth as a verifier. Read live from on-chain
-      <span class="mono">Attested</span> events.</p>
+      their name is worth as a verifier. Read from the on-chain snapshot plus
+      recent events.</p>
       <ol class="leaders-list" id="leaders-list"><li class="muted">Loading…</li></ol>
     </div>
   </section>
